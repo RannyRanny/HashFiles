@@ -23,7 +23,7 @@ namespace HashFiles
 		{
 			if (!File.Exists(hashBase))
 			{
-				var db = new SQLiteConnection(hashBase);									//создание БД если ее не существует
+				var db = new SQLiteConnection(hashBase);                                    //создание БД если ее не существует
 				db.CreateTable<FileHashInfo>();
 				db.Close();
 			}
@@ -40,11 +40,10 @@ namespace HashFiles
 			fileMaxCount = di.GetFiles().Length;
 
 			Task getFiles = new Task(new Action(() => GetFiles(path)));
-			Task getHashes = new Task(new Action(() => RunHash()));
 
 			getFiles.Start();
 			Thread.Sleep(100);              //ожидание пока в очереди появятся файлы
-			RunHash();
+
 			endEvent.WaitOne();
 
 			var dbWriter = new SQLiteConnection(hashBase);
@@ -61,12 +60,9 @@ namespace HashFiles
 		/// <param name="path"></param>
 		private static void GetFiles(string path)
 		{
-			foreach (string file in Directory.GetFiles(path))
+			foreach (object file in Directory.GetFiles(path))
 			{
-				lock (files)
-				{
-					files.Enqueue(file);
-				}
+				ThreadPool.QueueUserWorkItem(new WaitCallback(GetHash), file);
 			}
 		}
 
@@ -77,40 +73,30 @@ namespace HashFiles
 		private static void GetHash(object filePath)
 		{
 			MD5 md5 = MD5.Create();
-			byte[] data = md5.ComputeHash(new FileStream((string)filePath, FileMode.Open));
+			try
+			{
+				byte[] data = md5.ComputeHash(new FileStream((string)filePath, FileMode.Open));
 
-			StringBuilder sBuilder = new StringBuilder();
-			for (int i = 0; i < data.Length; i++)
-			{
-				sBuilder.Append(data[i].ToString("x2"));
+				StringBuilder sBuilder = new StringBuilder();
+				for (int i = 0; i < data.Length; i++)
+				{
+					sBuilder.Append(data[i].ToString("x2"));
+				}
+				hashes.Add(new FileHashInfo()
+				{
+					Hash = sBuilder.ToString(),
+					PathFile = (string)filePath
+				});
+
 			}
-			hashes.Add(new FileHashInfo()
+			catch(Exception e)
 			{
-				Hash = sBuilder.ToString(),
-				PathFile = (string)filePath
-			});
+				Console.WriteLine();
+				Console.WriteLine("Ошибка обработки файла " + (string)filePath);
+			}
 			fileCount++;
 			Console.Write("\r {0} файлов обработано из {1} ", fileCount, fileMaxCount);
 			if (fileCount == fileMaxCount) endEvent.Set();
-		}
-
-		/// <summary>
-		/// Получение файла из очереди и запуск расчета хеша
-		/// </summary>
-		private static void RunHash()
-		{
-			string file = "";
-			lock (files)
-			{
-				if (files.Count > 0)
-				{
-					file = files.Dequeue();
-				}
-				else return;
-			}
-			Task getHash = new Task(new Action(() => GetHash(file)));
-			getHash.Start();
-			RunHash();
 		}
 
 		private static bool AddHashToDB(SQLite.SQLiteConnection db, List<FileHashInfo> hashes)
